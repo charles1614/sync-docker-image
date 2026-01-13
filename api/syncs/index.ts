@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAuth, sendSuccess, sendError, type AuthenticatedRequest } from '../_lib/auth.js';
 import { db } from '../_lib/db.js';
-import { parseImageUrl, triggerWorkflow } from '../_lib/github.js';
+import { parseImageUrl, triggerWorkflow, getWorkflowStatus } from '../_lib/github.js';
 import type { CreateSyncJobRequest } from '../_lib/types.js';
 
 async function handler(req: AuthenticatedRequest, res: VercelResponse) {
@@ -15,7 +15,38 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         limit: limit ? parseInt(limit as string) : 50,
       });
 
-      return sendSuccess(res, { jobs });
+      // Update status for running jobs by checking GitHub
+      const updatedJobs = await Promise.all(
+        jobs.map(async (job) => {
+          // Only check GitHub if job is running and has a run_id
+          if (job.status === 'running' && job.github_run_id) {
+            try {
+              const githubStatus = await getWorkflowStatus(job.github_run_id);
+
+              // Update job if GitHub workflow is completed
+              if (githubStatus.status === 'completed') {
+                const isSuccess = githubStatus.conclusion === 'success';
+
+                const updated = await db.updateSyncJob(job.id, {
+                  status: isSuccess ? 'success' : 'failed',
+                  conclusion: githubStatus.conclusion || undefined,
+                  completed_at: new Date().toISOString(),
+                  logs_url: githubStatus.html_url,
+                });
+
+                return updated;
+              }
+            } catch (error) {
+              console.error(`Failed to update status for job ${job.id}:`, error);
+              // Continue with original job data if GitHub check fails
+            }
+          }
+
+          return job;
+        })
+      );
+
+      return sendSuccess(res, { jobs: updatedJobs });
     } catch (error: any) {
       console.error('Failed to list jobs:', error);
       return sendError(res, error.message || 'Failed to list sync jobs', 500);
