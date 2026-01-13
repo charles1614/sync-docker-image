@@ -14,14 +14,13 @@ export const supabase = createClient(supabaseUrl, supabaseServiceKey);
 // Client for user operations (with anon key)
 export const createUserClient = (accessToken?: string) => {
   const anonKey = process.env.SUPABASE_ANON_KEY!;
-  const client = createClient(supabaseUrl, anonKey);
-
-  if (accessToken) {
-    client.auth.setSession({
-      access_token: accessToken,
-      refresh_token: '',
-    });
-  }
+  const client = createClient(supabaseUrl, anonKey, {
+    global: {
+      headers: accessToken ? {
+        Authorization: `Bearer ${accessToken}`,
+      } : {},
+    },
+  });
 
   return client;
 };
