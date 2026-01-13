@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docker Image Sync to Aliyun</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <!-- Header -->
+        <div class="px-4 py-6 sm:px-0">
+            <div class="flex justify-between items-center">
+                <h1 class="text-3xl font-bold text-gray-900">
+                    Docker Image Sync to Aliyun
+                </h1>
+                <button
+                    id="logoutBtn"
+                    class="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+                >
+                    Logout
+                </button>
+            </div>
+        </div>
+
+        <!-- Sync Form -->
+        <div class="px-4 py-6 sm:px-0">
+            <div class="bg-white shadow sm:rounded-lg p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">Create New Sync Job</h2>
+
+                <form id="syncForm" class="space-y-4">
+                    <div>
+                        <label for="sourceImage" class="block text-sm font-medium text-gray-700">
+                            Source Image
+                        </label>
+                        <input
+                            type="text"
+                            id="sourceImage"
+                            name="sourceImage"
+                            placeholder="e.g., nginx:1.27, ghcr.io/owner/repo:tag, docker.io/library/nginx:latest"
+                            required
+                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        />
+                        <p class="mt-1 text-sm text-gray-500">
+                            Supports docker.io, ghcr.io, and other registries
+                        </p>
+                    </div>
+
+                    <div>
+                        <label for="destinationImage" class="block text-sm font-medium text-gray-700">
+                            Destination Image (Aliyun)
+                        </label>
+                        <input
+                            type="text"
+                            id="destinationImage"
+                            name="destinationImage"
+                            placeholder="e.g., registry.cn-shenzhen.aliyuncs.com/yourusername/nginx:1.27"
+                            required
+                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        />
+                    </div>
+
+                    <div>
+                        <label for="workflowType" class="block text-sm font-medium text-gray-700">
+                            Sync Type
+                        </label>
+                        <select
+                            id="workflowType"
+                            name="workflowType"
+                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        >
+                            <option value="copy">Copy (single tag)</option>
+                            <option value="sync">Sync (all tags)</option>
+                        </select>
+                        <p class="mt-1 text-sm text-gray-500">
+                            Copy: syncs a specific tag. Sync: syncs all tags from the repository.
+                        </p>
+                    </div>
+
+                    <div id="formError" class="hidden text-red-600 text-sm"></div>
+
+                    <button
+                        type="submit"
+                        class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                        Start Sync
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Jobs List -->
+        <div class="px-4 py-6 sm:px-0">
+            <div class="bg-white shadow sm:rounded-lg">
+                <div class="px-4 py-5 sm:p-6">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">Sync Jobs</h2>
+
+                    <div id="jobsContainer">
+                        <p class="text-gray-500 text-sm">Loading...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
