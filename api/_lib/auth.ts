@@ -12,7 +12,7 @@ export interface AuthenticatedRequest extends VercelRequest {
 export async function requireAuth(
   req: AuthenticatedRequest,
   res: VercelResponse,
-  handler: (req: AuthenticatedRequest, res: VercelResponse) => Promise<void>
+  handler: (req: AuthenticatedRequest, res: VercelResponse) => Promise<VercelResponse>
 ) {
   try {
     // Get access token from Authorization header
