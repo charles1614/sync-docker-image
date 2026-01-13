@@ -14,11 +14,23 @@ document.getElementById('syncForm').addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const sourceImage = document.getElementById('sourceImage').value;
-  const destinationImage = document.getElementById('destinationImage').value;
+  let destinationImage = document.getElementById('destinationImage').value.trim();
   const workflowType = document.getElementById('workflowType').value;
   const formError = document.getElementById('formError');
 
   formError.classList.add('hidden');
+
+  const DEFAULT_REGISTRY = 'registry.cn-shenzhen.aliyuncs.com/charles1416';
+
+  // Auto-fill destination image logic
+  if (!destinationImage) {
+    // If empty, extract image:tag from source and prepend default registry
+    const imageTag = extractImageAndTag(sourceImage);
+    destinationImage = `${DEFAULT_REGISTRY}/${imageTag}`;
+  } else if (!destinationImage.includes('/')) {
+    // If only image:tag provided (no registry), prepend default registry
+    destinationImage = `${DEFAULT_REGISTRY}/${destinationImage}`;
+  }
 
   try {
     const result = await createSyncJob(sourceImage, destinationImage, workflowType);
@@ -36,6 +48,24 @@ document.getElementById('syncForm').addEventListener('submit', async (e) => {
     formError.classList.remove('hidden');
   }
 });
+
+// Extract just the image name and tag from a full image URL
+function extractImageAndTag(imageUrl) {
+  // Remove registry (everything before the last slash that contains a dot)
+  let remaining = imageUrl;
+
+  // If it has a registry (contains dot and slash), remove it
+  if (remaining.match(/\.[^/]+\//)) {
+    const parts = remaining.split('/');
+    remaining = parts[parts.length - 1]; // Get last part (image:tag)
+  } else if (remaining.includes('/')) {
+    // Handle docker.io/library/nginx format
+    const parts = remaining.split('/');
+    remaining = parts[parts.length - 1]; // Get last part (image:tag)
+  }
+
+  return remaining;
+}
 
 // Load and display jobs
 async function loadJobs() {
