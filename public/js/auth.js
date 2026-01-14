@@ -58,6 +58,7 @@ export function logout() {
 
 export async function checkAuth() {
   if (!isAuthenticated()) {
+    // Keep loading visible during redirect
     window.location.href = '/login.html';
     return null;
   }
@@ -72,14 +73,23 @@ export async function checkAuth() {
     const data = await response.json();
 
     if (!data.success) {
-      logout();
+      // Keep loading visible during redirect
+      clearAuth();
+      window.location.href = '/login.html';
       return null;
+    }
+
+    // SUCCESS - hide loading and show content
+    if (window.hideLoadingShowContent) {
+      window.hideLoadingShowContent();
     }
 
     return data.data.user;
   } catch (error) {
     console.error('Auth check failed:', error);
-    logout();
+    // Keep loading visible during redirect
+    clearAuth();
+    window.location.href = '/login.html';
     return null;
   }
 }

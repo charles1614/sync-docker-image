@@ -7,6 +7,17 @@
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
+    <!-- Auth Loading Overlay -->
+    <div id="authLoadingOverlay" class="fixed inset-0 bg-gray-50 z-50 flex items-center justify-center">
+        <div class="text-center">
+            <!-- Spinner -->
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+            <p class="mt-4 text-gray-600 text-sm">Checking authentication...</p>
+        </div>
+    </div>
+
+    <!-- Main Content (hidden until auth succeeds) -->
+    <div id="mainContent" class="hidden">
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <!-- Header -->
         <div class="px-4 py-6 sm:px-0">
@@ -54,11 +65,12 @@
                             type="text"
                             id="destinationImage"
                             name="destinationImage"
-                            placeholder="Leave empty to auto-fill, or enter: nginx:tag or full URL"
+                            placeholder="Leave empty to auto-fill, or enter: charles1416/nginx:tag"
                             class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                         />
                         <p class="mt-1 text-sm text-gray-500">
-                            Auto-fills to: registry.cn-shenzhen.aliyuncs.com/charles1416/image:tag
+                            Enter just the repo path (e.g., "charles1416/nginx:tag") or full URL.
+                            Registry will be auto-normalized to: registry.cn-shenzhen.aliyuncs.com
                         </p>
                     </div>
 
@@ -104,6 +116,38 @@
             </div>
         </div>
     </div>
+    </div>
+
+    <!-- Show/hide content based on auth status -->
+    <script>
+        // This runs immediately, before module loading
+        window.hideLoadingShowContent = function() {
+            const overlay = document.getElementById('authLoadingOverlay');
+            const content = document.getElementById('mainContent');
+
+            if (overlay) overlay.style.display = 'none';
+            if (content) content.classList.remove('hidden');
+        };
+
+        // Fallback: if auth check takes >10s, show error
+        setTimeout(function() {
+            const overlay = document.getElementById('authLoadingOverlay');
+            if (overlay && overlay.style.display !== 'none') {
+                overlay.innerHTML = `
+                    <div class="text-center">
+                        <svg class="inline-block h-12 w-12 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p class="mt-4 text-gray-800 font-medium">Authentication check failed</p>
+                        <p class="mt-2 text-gray-600 text-sm">Please check your connection and refresh the page</p>
+                        <button onclick="location.reload()" class="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                            Refresh Page
+                        </button>
+                    </div>
+                `;
+            }
+        }, 10000);
+    </script>
 
     <script type="module" src="js/app.js"></script>
 </body>
