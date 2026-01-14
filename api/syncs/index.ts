@@ -11,16 +11,18 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
   // GET - List all sync jobs
   if (req.method === 'GET') {
     try {
-      const { status, limit } = req.query;
+      const { status, limit, offset, search } = req.query;
 
-      const jobs = await db.listSyncJobs(req.user!.id, {
+      const result = await db.listSyncJobs(req.user!.id, {
         status: status as string | undefined,
-        limit: limit ? parseInt(limit as string) : 50,
+        limit: limit ? parseInt(limit as string) : 10,
+        offset: offset ? parseInt(offset as string) : 0,
+        search: search as string | undefined,
       });
 
       // Update status for running jobs by checking GitHub
       const updatedJobs = await Promise.all(
-        jobs.map(async (job) => {
+        result.jobs.map(async (job) => {
           // Only check GitHub if job is running and has a run_id
           if (job.status === 'running' && job.github_run_id) {
             try {
@@ -37,6 +39,23 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
                   logs_url: githubStatus.html_url,
                 });
 
+                // Auto-cleanup old successful jobs
+                if (isSuccess) {
+                  try {
+                    const deletedCount = await db.deleteOlderSuccessfulJobs(
+                      req.user!.id,
+                      job.source_repo,
+                      job.id
+                    );
+                    if (deletedCount > 0) {
+                      console.log(`Cleaned up ${deletedCount} old successful jobs for ${job.source_repo}`);
+                    }
+                  } catch (error) {
+                    console.error('Failed to auto-cleanup old jobs:', error);
+                    // Don't fail the request if cleanup fails
+                  }
+                }
+
                 return updated;
               }
             } catch (error) {
@@ -49,7 +68,12 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         })
       );
 
-      return sendSuccess(res, { jobs: updatedJobs });
+      return sendSuccess(res, {
+        jobs: updatedJobs,
+        total: result.total,
+        limit: limit ? parseInt(limit as string) : 10,
+        offset: offset ? parseInt(offset as string) : 0,
+      });
     } catch (error: any) {
       console.error('Failed to list jobs:', error);
       return sendError(res, 'Failed to retrieve sync jobs', 500);

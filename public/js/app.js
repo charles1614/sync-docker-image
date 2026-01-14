@@ -1,7 +1,13 @@
 // Main application logic
 
 import { checkAuth, logout } from './auth.js';
-import { createSyncJob, listSyncJobs, getSyncJob } from './api.js';
+import { createSyncJob, listSyncJobs, getSyncJob, deleteSyncJob } from './api.js';
+
+// Pagination and filter state
+let currentPage = 1;
+let currentSearch = '';
+let currentStatusFilter = '';
+const itemsPerPage = 10;
 
 // Check authentication on page load
 const user = await checkAuth();
@@ -14,6 +20,24 @@ if (!user) {
 
 // Handle logout
 document.getElementById('logoutBtn').addEventListener('click', logout);
+
+// Handle search input with debouncing
+let searchTimeout;
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    currentSearch = e.target.value;
+    currentPage = 1;
+    loadJobs();
+  }, 500); // Debounce 500ms
+});
+
+// Handle status filter
+document.getElementById('statusFilter').addEventListener('change', (e) => {
+  currentStatusFilter = e.target.value;
+  currentPage = 1;
+  loadJobs();
+});
 
 // Handle sync form submission
 document.getElementById('syncForm').addEventListener('submit', async (e) => {
@@ -152,12 +176,28 @@ async function loadJobs() {
   const container = document.getElementById('jobsContainer');
 
   try {
-    const { jobs } = await listSyncJobs({ limit: 50 });
+    const offset = (currentPage - 1) * itemsPerPage;
+    const params = {
+      limit: itemsPerPage,
+      offset: offset
+    };
+
+    if (currentSearch) {
+      params.search = currentSearch;
+    }
+
+    if (currentStatusFilter) {
+      params.status = currentStatusFilter;
+    }
+
+    const { jobs, total } = await listSyncJobs(params);
 
     if (jobs.length === 0) {
-      container.innerHTML = '<p class="text-gray-500 text-sm">No sync jobs yet</p>';
+      container.innerHTML = '<p class="text-gray-500 text-sm">No sync jobs found</p>';
       return;
     }
+
+    const totalPages = Math.ceil(total / itemsPerPage);
 
     container.innerHTML = `
       <div class="overflow-x-auto">
@@ -177,12 +217,92 @@ async function loadJobs() {
           </tbody>
         </table>
       </div>
+
+      ${totalPages > 1 ? renderPagination(totalPages) : ''}
     `;
   } catch (error) {
     console.error('Failed to load jobs:', error);
     container.innerHTML = '<p class="text-red-600 text-sm">Failed to load sync jobs</p>';
   }
 }
+
+// Render pagination UI
+function renderPagination(totalPages) {
+  const maxVisible = 5;
+  let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+  let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+  if (endPage - startPage < maxVisible - 1) {
+    startPage = Math.max(1, endPage - maxVisible + 1);
+  }
+
+  let pages = [];
+
+  // Previous button
+  pages.push(`
+    <button
+      onclick="changePage(${currentPage - 1})"
+      ${currentPage === 1 ? 'disabled' : ''}
+      class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium ${currentPage === 1 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-50'}"
+    >
+      «
+    </button>
+  `);
+
+  // Page numbers
+  for (let i = startPage; i <= endPage; i++) {
+    pages.push(`
+      <button
+        onclick="changePage(${i})"
+        class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium ${i === currentPage ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white text-gray-700 hover:bg-gray-50'}"
+      >
+        ${i}
+      </button>
+    `);
+  }
+
+  // Next button
+  pages.push(`
+    <button
+      onclick="changePage(${currentPage + 1})"
+      ${currentPage === totalPages ? 'disabled' : ''}
+      class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium ${currentPage === totalPages ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-50'}"
+    >
+      »
+    </button>
+  `);
+
+  return `
+    <div class="bg-gray-50 px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mt-4">
+      <div class="flex-1 flex justify-between sm:hidden">
+        <button onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+          Previous
+        </button>
+        <button onclick="changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+          Next
+        </button>
+      </div>
+      <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+        <div>
+          <p class="text-sm text-gray-700">
+            Page <span class="font-medium">${currentPage}</span> of <span class="font-medium">${totalPages}</span>
+          </p>
+        </div>
+        <div>
+          <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+            ${pages.join('')}
+          </nav>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Change page function (global for onclick)
+window.changePage = (page) => {
+  currentPage = page;
+  loadJobs();
+};
 
 function renderJobRow(job) {
   const statusColors = {
@@ -238,11 +358,20 @@ function renderJobRow(job) {
         ${createdAt}
       </td>
       <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-        ${job.logs_url ? `
-          <a href="${job.logs_url}" target="_blank" class="text-indigo-600 hover:text-indigo-900">
-            View Logs
-          </a>
-        ` : '-'}
+        <div class="flex space-x-2">
+          ${job.logs_url ? `
+            <a href="${job.logs_url}" target="_blank" class="text-indigo-600 hover:text-indigo-900">
+              View Logs
+            </a>
+          ` : ''}
+          <button
+            onclick="deleteJob('${job.id}')"
+            class="text-red-600 hover:text-red-900"
+            title="Delete job"
+          >
+            Delete
+          </button>
+        </div>
       </td>
     </tr>
   `;
@@ -262,6 +391,25 @@ window.copyToClipboard = async (text) => {
   } catch (error) {
     console.error('Failed to copy:', error);
     alert('Failed to copy to clipboard');
+  }
+};
+
+// Delete job function (global for onclick)
+window.deleteJob = async (jobId) => {
+  if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) {
+    return;
+  }
+
+  try {
+    await deleteSyncJob(jobId);
+
+    // Refresh the jobs list
+    await loadJobs();
+
+    alert('Job deleted successfully');
+  } catch (error) {
+    console.error('Failed to delete job:', error);
+    alert('Failed to delete job: ' + (error.message || 'Unknown error'));
   }
 };
 

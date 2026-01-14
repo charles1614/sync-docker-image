@@ -16,6 +16,10 @@ Docker 的一些服务所在域名被封杀，无法直接访问和拉取镜像�
 - ✅ 一键复制同步后的阿里云镜像地址
 - ✅ 支持私有访问控制
 - ✅ 包含安全性增强：CORS 保护、速率限制、输入验证
+- ✅ 搜索和过滤功能：按源镜像名称搜索、按状态过滤
+- ✅ 分页显示：每页 10 条记录，支持翻页浏览
+- ✅ 任务管理：可删除不需要的同步任务
+- ✅ 自动清理：成功后自动删除同一镜像的旧任务
 
 部署到 Vercel，配置 Supabase 数据库，即可开始使用！
 
@@ -99,6 +103,11 @@ CREATE POLICY "Users can insert their own sync jobs"
 CREATE POLICY "Users can update their own sync jobs"
   ON sync_jobs
   FOR UPDATE
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own sync jobs"
+  ON sync_jobs
+  FOR DELETE
   USING (auth.uid() = user_id);
 ```
 

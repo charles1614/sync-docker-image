@@ -52,6 +52,14 @@ export async function listSyncJobs(params = {}) {
     queryParams.append('limit', params.limit.toString());
   }
 
+  if (params.offset) {
+    queryParams.append('offset', params.offset.toString());
+  }
+
+  if (params.search) {
+    queryParams.append('search', params.search);
+  }
+
   const queryString = queryParams.toString();
   const endpoint = `/syncs${queryString ? '?' + queryString : ''}`;
 
@@ -60,4 +68,10 @@ export async function listSyncJobs(params = {}) {
 
 export async function getSyncJob(jobId) {
   return request(`/syncs/${jobId}`);
+}
+
+export async function deleteSyncJob(jobId) {
+  return request(`/syncs/${jobId}`, {
+    method: 'DELETE',
+  });
 }
