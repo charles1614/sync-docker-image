@@ -83,12 +83,14 @@ export const db = {
   // Update sync job
   async updateSyncJob(
     id: string,
+    userId: string,
     updates: Partial<SyncJob>
   ): Promise<SyncJob> {
     const { data, error } = await supabase
       .from('sync_jobs')
       .update(updates)
       .eq('id', id)
+      .eq('user_id', userId)
       .select()
       .single();
 

@@ -3,6 +3,9 @@ import { requireAuth, sendSuccess, sendError, type AuthenticatedRequest } from '
 import { db } from '../_lib/db.js';
 import { parseImageUrl, triggerWorkflow, getWorkflowStatus } from '../_lib/github.js';
 import type { CreateSyncJobRequest } from '../_lib/types.js';
+import { setCorsHeaders } from '../_lib/cors.js';
+import { validateImageUrl, validateWorkflowType } from '../_lib/validation.js';
+import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '../_lib/rateLimit.js';
 
 async function handler(req: AuthenticatedRequest, res: VercelResponse) {
   // GET - List all sync jobs
@@ -27,7 +30,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
               if (githubStatus.status === 'completed') {
                 const isSuccess = githubStatus.conclusion === 'success';
 
-                const updated = await db.updateSyncJob(job.id, {
+                const updated = await db.updateSyncJob(job.id, req.user!.id, {
                   status: isSuccess ? 'success' : 'failed',
                   conclusion: githubStatus.conclusion || undefined,
                   completed_at: new Date().toISOString(),
@@ -49,17 +52,49 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
       return sendSuccess(res, { jobs: updatedJobs });
     } catch (error: any) {
       console.error('Failed to list jobs:', error);
-      return sendError(res, error.message || 'Failed to list sync jobs', 500);
+      return sendError(res, 'Failed to retrieve sync jobs', 500);
     }
   }
 
   // POST - Create new sync job
   if (req.method === 'POST') {
+    // Apply rate limiting for job creation
+    const clientId = getClientIdentifier(req);
+    const rateLimit = checkRateLimit(`createJob:${clientId}`, RATE_LIMITS.createJob);
+
+    res.setHeader('X-RateLimit-Limit', RATE_LIMITS.createJob.maxRequests.toString());
+    res.setHeader('X-RateLimit-Remaining', rateLimit.remaining.toString());
+    res.setHeader('X-RateLimit-Reset', new Date(rateLimit.resetTime).toISOString());
+
+    if (!rateLimit.allowed) {
+      return sendError(res, 'Too many sync job requests. Please try again later.', 429);
+    }
+
     try {
       const { source_image, destination_image, workflow_type }: CreateSyncJobRequest = req.body;
 
       if (!source_image || !destination_image) {
         return sendError(res, 'source_image and destination_image are required');
+      }
+
+      // Validate source image
+      const sourceValidation = validateImageUrl(source_image);
+      if (!sourceValidation.valid) {
+        return sendError(res, `Invalid source image: ${sourceValidation.error}`);
+      }
+
+      // Validate destination image
+      const destValidation = validateImageUrl(destination_image);
+      if (!destValidation.valid) {
+        return sendError(res, `Invalid destination image: ${destValidation.error}`);
+      }
+
+      // Validate workflow type if provided
+      if (workflow_type) {
+        const workflowValidation = validateWorkflowType(workflow_type);
+        if (!workflowValidation.valid) {
+          return sendError(res, workflowValidation.error!);
+        }
       }
 
       // Parse image URLs
@@ -90,7 +125,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         const { run_id, run_number } = await triggerWorkflow(job);
 
         // Update job with run information
-        const updatedJob = await db.updateSyncJob(job.id, {
+        const updatedJob = await db.updateSyncJob(job.id, req.user!.id, {
           github_run_id: run_id?.toString(),
           github_run_number: run_number,
           status: 'running',
@@ -99,17 +134,20 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
 
         return sendSuccess(res, { job: updatedJob }, 201);
       } catch (error: any) {
+        // Log detailed error
+        console.error('Failed to trigger workflow:', error);
+
         // Update job status to failed
-        await db.updateSyncJob(job.id, {
+        await db.updateSyncJob(job.id, req.user!.id, {
           status: 'failed',
-          error_message: error.message || 'Failed to trigger workflow',
+          error_message: 'Failed to trigger workflow',
         });
 
-        return sendError(res, 'Failed to trigger GitHub workflow: ' + error.message, 500);
+        return sendError(res, 'Failed to start sync job', 500);
       }
     } catch (error: any) {
       console.error('Failed to create job:', error);
-      return sendError(res, error.message || 'Failed to create sync job', 500);
+      return sendError(res, 'Failed to create sync job', 500);
     }
   }
 
@@ -117,14 +155,9 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
 }
 
 export default async function (req: VercelRequest, res: VercelResponse) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  // Handle CORS
+  if (setCorsHeaders(req, res)) {
+    return; // Preflight request handled
   }
 
   return requireAuth(req as AuthenticatedRequest, res, handler);

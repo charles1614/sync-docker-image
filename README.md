@@ -15,10 +15,230 @@ Docker 的一些服务所在域名被封杀，无法直接访问和拉取镜像�
 - ✅ 自动更新任务进度
 - ✅ 一键复制同步后的阿里云镜像地址
 - ✅ 支持私有访问控制
+- ✅ 包含安全性增强：CORS 保护、速率限制、输入验证
 
-**[查看 Web 界面设置教程 →](WEB_SETUP.md)**
+部署到 Vercel，配置 Supabase 数据库，即可开始使用！
 
-部署到 Vercel 或 Netlify，配置 Supabase 数据库，即可开始使用！
+### Web 界面设置教程
+
+#### 前置要求
+
+1. **Supabase 账号** - 在 https://supabase.com 注册
+2. **GitHub 账号**
+3. **Vercel 账号** - 在 https://vercel.com 注册 (免费版即可)
+4. **阿里云容器镜像仓库** - 已在仓库 Secrets 中配置好凭证
+
+#### 步骤 1: 设置 Supabase
+
+##### 1.1 创建 Supabase 项目
+
+1. 访问 https://app.supabase.com
+2. 点击 "New project"
+3. 填写信息：
+   - Name: `docker-image-sync` (或任意名称)
+   - Database Password: (生成强密码)
+   - Region: 选择离你最近的区域
+4. 点击 "Create new project" 并等待初始化
+
+##### 1.2 创建数据库表
+
+1. 在 Supabase 项目中，进入 "SQL Editor"
+2. 点击 "New query"
+3. 粘贴以下 SQL：
+
+```sql
+-- 创建 sync_jobs 表
+CREATE TABLE sync_jobs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES auth.users(id),
+
+  -- 任务详情
+  workflow_type VARCHAR(10) NOT NULL,
+  source_registry VARCHAR(255) DEFAULT 'docker.io',
+  source_repo VARCHAR(255) NOT NULL,
+  destination_registry VARCHAR(255) NOT NULL,
+  destination_repo VARCHAR(255) NOT NULL,
+
+  -- GitHub Action 详情
+  github_run_id VARCHAR(50),
+  github_run_number INTEGER,
+
+  -- 状态跟踪
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  conclusion VARCHAR(20),
+
+  -- 时间戳
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+
+  -- 附加信息
+  error_message TEXT,
+  logs_url TEXT
+);
+
+-- 创建索引
+CREATE INDEX idx_sync_jobs_user_id ON sync_jobs(user_id);
+CREATE INDEX idx_sync_jobs_status ON sync_jobs(status);
+CREATE INDEX idx_sync_jobs_created_at ON sync_jobs(created_at DESC);
+
+-- 启用行级安全
+ALTER TABLE sync_jobs ENABLE ROW LEVEL SECURITY;
+
+-- 创建策略：用户只能看到自己的任务
+CREATE POLICY "Users can view their own sync jobs"
+  ON sync_jobs
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own sync jobs"
+  ON sync_jobs
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own sync jobs"
+  ON sync_jobs
+  FOR UPDATE
+  USING (auth.uid() = user_id);
+```
+
+4. 点击 "Run" 执行 SQL
+
+##### 1.3 创建用户账号
+
+1. 进入 "Authentication" → "Users"
+2. 点击 "Add user" → "Create new user"
+3. 填写信息：
+   - Email: 你的邮箱地址
+   - Password: 创建密码 (用于登录 Web 应用)
+   - Auto Confirm User: **启用此选项**
+4. 点击 "Create user"
+
+##### 1.4 获取 Supabase 凭证
+
+1. 进入 "Settings" → "API"
+2. 复制以下值 (Vercel 部署时需要)：
+   - **Project URL** (例如：`https://xxxxx.supabase.co`)
+   - **anon public** key
+   - **service_role** key (点击 "Reveal" 查看)
+
+#### 步骤 2: 创建 GitHub Personal Access Token
+
+1. 访问 GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. 点击 "Generate new token" → "Generate new token (classic)"
+3. 填写信息：
+   - Note: `Docker Image Sync Web App`
+   - Expiration: 选择你需要的过期时间
+   - Scopes: 选择：
+     - ✅ `repo` (完全控制私有仓库)
+     - ✅ `workflow` (更新 GitHub Action workflows)
+4. 点击 "Generate token"
+5. **复制 token** (你以后无法再看到它！)
+
+#### 步骤 3: 部署到 Vercel
+
+##### 3.1 通过 Vercel Dashboard 部署 (推荐)
+
+1. 访问 https://vercel.com
+2. 点击 "Add New" → "Project"
+3. 导入你的 GitHub 仓库
+4. 配置：
+   - Framework Preset: **Other**
+   - Root Directory: `./` (保持默认)
+   - Build Command: 留空
+   - Output Directory: 留空
+5. 点击 "Deploy"
+
+##### 3.2 添加环境变量
+
+部署完成后，进入项目设置：
+
+1. 进入 "Settings" → "Environment Variables"
+2. 添加以下变量：
+
+| 变量名 | 值 | 来源 |
+|------|-------|--------|
+| `GITHUB_TOKEN` | `ghp_xxxxx...` | 步骤 2 的 GitHub Personal Access Token |
+| `GITHUB_REPOSITORY` | `your-username/sync-docker-image` | 你的 GitHub 仓库 (格式: `owner/repo`) |
+| `SUPABASE_URL` | `https://xxxxx.supabase.co` | 步骤 1.4 的 Supabase URL |
+| `SUPABASE_ANON_KEY` | `eyJxxxxx...` | 步骤 1.4 的 anon public key |
+| `SUPABASE_SERVICE_KEY` | `eyJxxxxx...` | 步骤 1.4 的 service_role key |
+| `ALLOWED_ORIGINS` | `https://your-app.vercel.app` | 你的 Vercel 部署域名 (用逗号分隔多个域名) |
+
+3. 为每个变量点击 "Save"
+
+**重要：** `ALLOWED_ORIGINS` 是安全功能的一部分，只允许指定的域名访问 API。请将其设置为你的实际部署域名。例如：
+- 单个域名：`https://your-app.vercel.app`
+- 多个域名：`https://your-app.vercel.app,https://custom-domain.com`
+
+##### 3.3 重新部署
+
+1. 进入 "Deployments"
+2. 点击最新部署的三个点
+3. 点击 "Redeploy"
+4. 确保 "Use existing Build Cache" 关闭
+5. 点击 "Redeploy"
+
+#### 步骤 4: 测试应用
+
+##### 4.1 访问 Web 应用
+
+1. 访问你的 Vercel 部署 URL (例如：`https://your-app.vercel.app`)
+2. 你应该看到登录页面
+3. 使用在 Supabase 中创建的邮箱和密码登录 (步骤 1.3)
+
+##### 4.2 创建测试同步任务
+
+1. 登录后，你会看到主页面
+2. 填写表单：
+   - Source Image: `nginx:1.27`
+   - Destination Image: `registry.cn-shenzhen.aliyuncs.com/your-namespace/nginx:1.27`
+   - Sync Type: Copy (single tag)
+3. 点击 "Start Sync"
+
+##### 4.3 验证
+
+1. 检查页面上的任务列表 - 你应该看到状态为 "running" 的任务
+2. 访问你的 GitHub 仓库 → Actions 标签
+3. 你应该看到新的 workflow 运行
+4. 页面每 10 秒自动刷新以更新状态
+5. 完成后，你可以点击复制按钮来复制阿里云镜像 URL
+
+#### 安全性说明
+
+本项目包含以下安全增强：
+
+- **CORS 保护**: 只允许配置的域名访问 API (通过 `ALLOWED_ORIGINS`)
+- **速率限制**: 防止暴力攻击 (登录: 15分钟5次，创建任务: 1分钟10次)
+- **输入验证**: 严格验证 Docker 镜像 URL 格式
+- **授权检查**: 用户只能访问和修改自己的任务
+- **安全头**: X-Frame-Options, CSP 等
+- **行级安全**: Supabase RLS 确保数据隔离
+
+#### 故障排除
+
+**问题: "Missing Supabase environment variables"**
+- 检查所有环境变量是否在 Vercel 中设置
+- 确保添加变量后重新部署
+
+**问题: "Failed to trigger GitHub workflow"**
+- 验证你的 GitHub token 具有 `repo` 和 `workflow` 权限
+- 检查 `GITHUB_REPOSITORY` 格式是否正确 (`owner/repo`)
+- 确保 GitHub token 没有过期
+
+**问题: 登录失败**
+- 验证用户在 Supabase Authentication 中存在
+- 检查创建用户时是否启用了 "Auto Confirm User"
+- 尝试在 Supabase dashboard 中重置密码
+
+**问题: CORS 错误**
+- 确保 `ALLOWED_ORIGINS` 环境变量包含你访问应用的域名
+- 检查浏览器控制台的具体错误信息
+- 验证域名格式正确 (包含 `https://`)
+
+**问题: 速率限制错误 (429)**
+- 等待限制重置 (登录: 15分钟，API: 1分钟)
+- 检查是否有意外的重复请求
 
 ---
 

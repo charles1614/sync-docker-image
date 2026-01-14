@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAuth, sendSuccess, sendError, type AuthenticatedRequest } from '../_lib/auth.js';
 import { db } from '../_lib/db.js';
 import { getWorkflowStatus } from '../_lib/github.js';
+import { setCorsHeaders } from '../_lib/cors.js';
 
 async function handler(req: AuthenticatedRequest, res: VercelResponse) {
   if (req.method !== 'GET') {
@@ -31,7 +32,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         if (status.status === 'completed') {
           const isSuccess = status.conclusion === 'success';
 
-          const updatedJob = await db.updateSyncJob(job.id, {
+          const updatedJob = await db.updateSyncJob(job.id, req.user!.id, {
             status: isSuccess ? 'success' : 'failed',
             conclusion: status.conclusion || undefined,
             completed_at: new Date().toISOString(),
@@ -49,19 +50,14 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
     return sendSuccess(res, { job });
   } catch (error: any) {
     console.error('Failed to get job:', error);
-    return sendError(res, error.message || 'Failed to get sync job', 500);
+    return sendError(res, 'Failed to retrieve sync job', 500);
   }
 }
 
 export default async function (req: VercelRequest, res: VercelResponse) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  // Handle CORS
+  if (setCorsHeaders(req, res)) {
+    return; // Preflight request handled
   }
 
   return requireAuth(req as AuthenticatedRequest, res, handler);
