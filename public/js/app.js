@@ -195,6 +195,16 @@ function renderJobRow(job) {
   const statusColor = statusColors[job.status] || 'bg-gray-100 text-gray-800';
   const createdAt = new Date(job.created_at).toLocaleString();
 
+  // Build full destination URL, handling both old and new data formats
+  let fullDestinationUrl;
+  if (job.destination_repo.match(/\.[^/]+\//)) {
+    // destination_repo already contains registry (old format)
+    fullDestinationUrl = job.destination_repo;
+  } else {
+    // destination_repo is just the repo path (new format)
+    fullDestinationUrl = `${job.destination_registry}/${job.destination_repo}`;
+  }
+
   return `
     <tr data-job-id="${job.id}">
       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -202,12 +212,12 @@ function renderJobRow(job) {
       </td>
       <td class="px-6 py-4 text-sm text-gray-900">
         <div class="flex items-center">
-          <span class="truncate max-w-xs" title="${escapeHtml(job.destination_repo)}">
-            ${escapeHtml(job.destination_repo)}
+          <span class="truncate max-w-xs" title="${escapeHtml(fullDestinationUrl)}">
+            ${escapeHtml(fullDestinationUrl)}
           </span>
           ${job.status === 'success' ? `
             <button
-              onclick="copyToClipboard('${escapeHtml(job.destination_registry)}/${escapeHtml(job.destination_repo)}')"
+              onclick="copyToClipboard('${escapeHtml(fullDestinationUrl)}')"
               class="ml-2 text-indigo-600 hover:text-indigo-900"
               title="Copy full image URL"
             >
