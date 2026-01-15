@@ -4,6 +4,7 @@
 const ALLOWED_REGISTRIES = [
   'docker.io',
   'ghcr.io',
+  'nvcr.io',
   'gcr.io',
   'registry.hub.docker.com',
   'quay.io',
