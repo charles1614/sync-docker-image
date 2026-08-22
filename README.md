@@ -20,6 +20,7 @@ Docker 的一些服务所在域名被封杀，无法直接访问和拉取镜像�
 - ✅ 分页显示：每页 10 条记录，支持翻页浏览
 - ✅ 任务管理：可删除不需要的同步任务
 - ✅ 自动清理：成功后自动删除同一镜像的旧任务
+- ✅ API Token + `sdi` 命令行工具：终端和自动化脚本也能触发同步、查看进度
 
 部署到 Vercel，配置 Supabase 数据库，即可开始使用！
 
@@ -109,6 +110,31 @@ CREATE POLICY "Users can delete their own sync jobs"
   ON sync_jobs
   FOR DELETE
   USING (auth.uid() = user_id);
+
+-- 创建 api_tokens 表 (供 CLI / 自动化使用)
+CREATE TABLE api_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+
+  -- 便于识别的名称，以及可公开展示的前缀 (如 sdi_A1b2C3d4)
+  name VARCHAR(100) NOT NULL,
+  token_prefix VARCHAR(20) NOT NULL,
+
+  -- 只存 SHA-256 哈希，明文仅在生成时展示一次
+  token_hash VARCHAR(64) NOT NULL UNIQUE,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_api_tokens_token_hash ON api_tokens(token_hash);
+CREATE INDEX idx_api_tokens_user_id ON api_tokens(user_id);
+
+-- 启用行级安全。这里不创建任何策略：该表只允许后端用 service_role 访问，
+-- 前端拿不到任何 token 记录。
+ALTER TABLE api_tokens ENABLE ROW LEVEL SECURITY;
 ```
 
 4. 点击 "Run" 执行 SQL
@@ -173,6 +199,8 @@ CREATE POLICY "Users can delete their own sync jobs"
 | `SUPABASE_ANON_KEY` | `eyJxxxxx...` | 步骤 1.4 的 anon public key |
 | `SUPABASE_SERVICE_KEY` | `eyJxxxxx...` | 步骤 1.4 的 service_role key |
 | `ALLOWED_ORIGINS` | `https://your-app.vercel.app` | 你的 Vercel 部署域名 (用逗号分隔多个域名) |
+| `DEFAULT_DESTINATION_REGISTRY` | `registry.cn-shenzhen.aliyuncs.com` | 省略目标镜像时使用的默认 registry (可选) |
+| `DEFAULT_DESTINATION_SCOPE` | `your-namespace` | 省略目标镜像时使用的默认命名空间 (可选) |
 
 3. 为每个变量点击 "Save"
 
@@ -248,6 +276,130 @@ CREATE POLICY "Users can delete their own sync jobs"
 **问题: 速率限制错误 (429)**
 - 等待限制重置 (登录: 15分钟，API: 1分钟)
 - 检查是否有意外的重复请求
+
+---
+
+## 🖥️ 命令行工具 `sdi`
+
+Web 界面可以生成 **API Token**，`sdi` 拿着这个 token 调用 Web 的 API，
+所以在终端里就能触发同步、查看每一步的进度 —— 不需要 GitHub CLI，也不需要 clone 仓库。
+
+> 这与下面的 `exec.sh` 是两条独立的路径：`exec.sh` 直接用 `gh` 调 GitHub Actions，
+> `sdi` 走 Web 服务，因此任务会记录在数据库里，网页上也能看到。
+
+### 安装
+
+```bash
+npm install -g sync-docker-image-cli
+```
+
+也可以直接从仓库运行，无需安装：
+
+```bash
+node cli/sdi.js help
+```
+
+### 生成 Token 并登录
+
+1. 打开 `https://<你的域名>/tokens`
+2. 填写名称、选择有效期，点击 **Generate token**
+3. **立刻复制** 生成的 token（`sdi_...`），它只显示这一次
+4. 在终端执行：
+
+```bash
+sdi login https://your-app.vercel.app
+```
+
+按提示粘贴 token 即可。凭据保存在 `~/.config/sync-docker-image/config.json`（权限 `0600`）。
+
+CI 或容器里可以跳过 `login`，直接用环境变量：
+
+```bash
+export SDI_URL=https://your-app.vercel.app
+export SDI_TOKEN=sdi_xxxxxxxx
+```
+
+### 常用命令
+
+```bash
+# 同步单个标签。省略目标镜像时，使用服务端配置的默认 registry / 命名空间
+sdi copy nginx:1.27
+
+# 等待完成，并实时显示 GitHub Actions 正在执行哪一步
+sdi copy ghcr.io/owner/app:v1 --wait
+
+# 显式指定目标
+sdi copy nvcr.io/nvidia/pytorch:24.05-py3 charles1416/pytorch:24.05 --wait
+
+# 同步一个仓库的全部标签
+sdi sync nginx charles1416
+
+# 同步完成后自动 docker pull 下来
+sdi copy redis:7 --wait --pull
+
+# 查看任务
+sdi list
+sdi list --status failed
+sdi status <job-id> --wait
+sdi rm <job-id>
+```
+
+完整参数见 `sdi help`。
+
+### 给脚本 / AI Agent (harness) 使用
+
+所有命令都支持 `--json`：stdout 只输出一份 JSON，人类可读的信息全部走 stderr，
+可以直接管道给 `jq`。
+
+```bash
+IMAGE=$(sdi copy redis:7 --wait --json | jq -r '.destination')
+docker pull "$IMAGE"
+```
+
+退出码是稳定的，方便据此分支：
+
+| 退出码 | 含义 |
+|-------|------|
+| `0` | 成功 |
+| `1` | 网络 / 服务端 / 认证错误 |
+| `2` | 参数用法错误 |
+| `3` | 同步任务本身失败 |
+| `4` | `--wait` 超时（任务仍在运行） |
+
+```bash
+sdi copy nginx:1.27 --wait --json > result.json
+case $? in
+  0) echo "已同步: $(jq -r .destination result.json)" ;;
+  3) echo "失败，日志: $(jq -r .job.logs_url result.json)" ;;
+  4) echo "还在跑，稍后用 sdi status 查看" ;;
+  *) echo "出错了" ;;
+esac
+```
+
+`--wait` 默认每 5 秒轮询一次、30 分钟超时，可用 `--interval` 和 `--timeout`（单位：秒）调整。
+
+### Token 的安全边界
+
+- 服务端只保存 token 的 **SHA-256 哈希**，明文仅在生成时展示一次
+- Token **不能** 用来创建或吊销其它 token —— `/api/tokens` 只接受浏览器会话
+- 随时可以在 `/tokens` 页面吊销，正在使用它的 CLI 会立刻失效
+- 支持设置有效期，过期后自动拒绝
+
+### 发布到 npm
+
+`.github/workflows/publish-cli.yml` 在推送 tag 时自动发布：
+
+```bash
+# 更新 cli/package.json 里的 version（或者直接靠 tag 决定）
+git tag cli-v1.0.1
+git push --tags
+```
+
+workflow 会用 tag 推导版本号、跑冒烟测试，然后通过 npm
+[trusted publishing](https://docs.npmjs.com/trusted-publishers)（OIDC，无需在仓库里存 npm token）发布。
+
+> 首次发布前，需要先在 npmjs.com 上为该包配置 Trusted Publisher，
+> 指向本仓库的 `publish-cli.yml`。如果包还不存在，可以先本地 `cd cli && npm publish --access public` 发一次。
 
 ---
 

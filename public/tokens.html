@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Tokens · Docker Image Sync</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Auth Loading Overlay -->
+    <div id="authLoadingOverlay" class="fixed inset-0 bg-gray-50 z-50 flex items-center justify-center">
+        <div class="text-center">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+            <p class="mt-4 text-gray-600 text-sm">Checking authentication...</p>
+        </div>
+    </div>
+
+    <!-- Main Content (hidden until auth succeeds) -->
+    <div id="mainContent" class="hidden">
+    <div class="max-w-5xl mx-auto py-6 sm:px-6 lg:px-8">
+        <!-- Header -->
+        <div class="px-4 py-6 sm:px-0">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-900">API Tokens</h1>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Tokens let the <code class="px-1 py-0.5 bg-gray-100 rounded">sdi</code> CLI trigger syncs and read progress on your behalf.
+                    </p>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-sm font-medium text-indigo-600 hover:text-indigo-900">← Sync Jobs</a>
+                    <button id="logoutBtn" class="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Newly created token (shown once) -->
+        <div id="newTokenPanel" class="hidden px-4 sm:px-0 mb-6">
+            <div class="bg-green-50 border border-green-300 rounded-lg p-6">
+                <h2 class="text-lg font-medium text-green-900">Token created</h2>
+                <p class="mt-1 text-sm text-green-800">
+                    Copy it now — this is the only time it will be shown.
+                </p>
+                <div class="mt-4 flex items-center gap-2">
+                    <code id="newTokenValue" class="flex-1 block px-3 py-2 bg-white border border-green-300 rounded font-mono text-sm break-all"></code>
+                    <button id="copyTokenBtn" class="shrink-0 px-3 py-2 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700">
+                        Copy
+                    </button>
+                </div>
+
+                <p class="mt-4 text-sm font-medium text-green-900">Log the CLI in with:</p>
+                <pre id="loginSnippet" class="mt-1 px-3 py-2 bg-green-900 text-green-50 rounded text-xs overflow-x-auto"></pre>
+
+                <button id="dismissTokenBtn" class="mt-4 text-sm text-green-800 hover:text-green-900 underline">
+                    Done, hide this
+                </button>
+            </div>
+        </div>
+
+        <!-- Create token -->
+        <div class="px-4 sm:px-0">
+            <div class="bg-white shadow sm:rounded-lg p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">Generate a new token</h2>
+
+                <form id="tokenForm" class="space-y-4">
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="tokenName" class="block text-sm font-medium text-gray-700">Name</label>
+                            <input
+                                type="text"
+                                id="tokenName"
+                                name="tokenName"
+                                placeholder="e.g., laptop CLI, CI runner"
+                                maxlength="100"
+                                required
+                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            />
+                            <p class="mt-1 text-sm text-gray-500">Only to help you recognise it later.</p>
+                        </div>
+
+                        <div>
+                            <label for="tokenExpiry" class="block text-sm font-medium text-gray-700">Expires</label>
+                            <select
+                                id="tokenExpiry"
+                                name="tokenExpiry"
+                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            >
+                                <option value="30">30 days</option>
+                                <option value="90" selected>90 days</option>
+                                <option value="365">1 year</option>
+                                <option value="">No expiry</option>
+                            </select>
+                            <p class="mt-1 text-sm text-gray-500">Shorter is safer. You can always make another.</p>
+                        </div>
+                    </div>
+
+                    <div id="tokenError" class="hidden text-red-600 text-sm"></div>
+
+                    <button
+                        type="submit"
+                        id="createTokenBtn"
+                        class="w-full sm:w-auto flex justify-center py-2 px-6 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                    >
+                        Generate token
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Existing tokens -->
+        <div class="px-4 py-6 sm:px-0">
+            <div class="bg-white shadow sm:rounded-lg">
+                <div class="px-4 py-5 sm:p-6">
+                    <h2 class="text-lg font-medium text-gray-900 mb-4">Active tokens</h2>
+                    <div id="tokensContainer">
+                        <p class="text-gray-500 text-sm">Loading...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CLI quickstart -->
+        <div class="px-4 pb-10 sm:px-0">
+            <div class="bg-white shadow sm:rounded-lg p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">Using the CLI</h2>
+                <pre class="px-3 py-3 bg-gray-900 text-gray-100 rounded text-xs overflow-x-auto"><code>npm install -g sync-docker-image-cli
+
+sdi login <span id="cliUrlHint">https://example.vercel.app</span>
+
+sdi copy nginx:1.27 --wait          <span class="text-gray-400"># sync one tag, block until done</span>
+sdi sync nginx                      <span class="text-gray-400"># sync every tag</span>
+sdi list --status failed            <span class="text-gray-400"># recent jobs</span>
+sdi status &lt;job-id&gt; --wait          <span class="text-gray-400"># step-by-step progress</span>
+sdi copy redis:7 --wait --json      <span class="text-gray-400"># machine-readable output</span></code></pre>
+                <p class="mt-3 text-sm text-gray-500">
+                    For scripts and agents: pass <code class="px-1 py-0.5 bg-gray-100 rounded">--json</code>, and branch on the exit code —
+                    <code class="px-1 py-0.5 bg-gray-100 rounded">0</code> success,
+                    <code class="px-1 py-0.5 bg-gray-100 rounded">3</code> sync failed,
+                    <code class="px-1 py-0.5 bg-gray-100 rounded">4</code> timed out.
+                </p>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <script>
+        window.hideLoadingShowContent = function() {
+            const overlay = document.getElementById('authLoadingOverlay');
+            const content = document.getElementById('mainContent');
+
+            if (overlay) overlay.style.display = 'none';
+            if (content) content.classList.remove('hidden');
+        };
+
+        setTimeout(function() {
+            const overlay = document.getElementById('authLoadingOverlay');
+            if (overlay && overlay.style.display !== 'none') {
+                overlay.innerHTML = `
+                    <div class="text-center">
+                        <p class="mt-4 text-gray-800 font-medium">Authentication check failed</p>
+                        <p class="mt-2 text-gray-600 text-sm">Please check your connection and refresh the page</p>
+                        <button onclick="location.reload()" class="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                            Refresh Page
+                        </button>
+                    </div>
+                `;
+            }
+        }, 10000);
+    </script>
+
+    <script type="module" src="js/tokens.js"></script>
+</body>
+</html>

@@ -5,6 +5,7 @@ import { parseImageUrl, triggerWorkflow, getWorkflowStatus } from '../_lib/githu
 import type { CreateSyncJobRequest } from '../_lib/types.js';
 import { setCorsHeaders } from '../_lib/cors.js';
 import { validateImageUrl, validateWorkflowType } from '../_lib/validation.js';
+import { normalizeDestination } from '../_lib/imageDefaults.js';
 import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '../_lib/rateLimit.js';
 
 async function handler(req: AuthenticatedRequest, res: VercelResponse) {
@@ -97,20 +98,14 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
     try {
       const { source_image, destination_image, workflow_type }: CreateSyncJobRequest = req.body;
 
-      if (!source_image || !destination_image) {
-        return sendError(res, 'source_image and destination_image are required');
+      if (!source_image) {
+        return sendError(res, 'source_image is required');
       }
 
       // Validate source image
       const sourceValidation = validateImageUrl(source_image);
       if (!sourceValidation.valid) {
         return sendError(res, `Invalid source image: ${sourceValidation.error}`);
-      }
-
-      // Validate destination image
-      const destValidation = validateImageUrl(destination_image);
-      if (!destValidation.valid) {
-        return sendError(res, `Invalid destination image: ${destValidation.error}`);
       }
 
       // Validate workflow type if provided
@@ -121,9 +116,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         }
       }
 
-      // Parse image URLs
       const sourceParts = parseImageUrl(source_image);
-      const destParts = parseImageUrl(destination_image);
 
       // Determine workflow type if not specified
       let finalWorkflowType: 'copy' | 'sync' = workflow_type || 'copy';
@@ -133,6 +126,23 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         finalWorkflowType = 'sync';
       }
 
+      // Fill in registry/scope defaults so API clients (the CLI) can pass a bare
+      // repo path, or omit the destination entirely. Already-qualified values,
+      // such as the ones the web form sends, pass through untouched.
+      const resolvedDestination = normalizeDestination(
+        source_image,
+        destination_image,
+        finalWorkflowType
+      );
+
+      // Validate destination image
+      const destValidation = validateImageUrl(resolvedDestination);
+      if (!destValidation.valid) {
+        return sendError(res, `Invalid destination image: ${destValidation.error}`);
+      }
+
+      const destParts = parseImageUrl(resolvedDestination);
+
       // Create sync job in database
       const job = await db.createSyncJob({
         user_id: req.user!.id,
@@ -140,7 +150,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         source_registry: sourceParts.registry,
         source_repo: source_image,
         destination_registry: destParts.registry,
-        destination_repo: destination_image,
+        destination_repo: resolvedDestination,
         status: 'pending',
       });
 

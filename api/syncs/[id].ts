@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAuth, sendSuccess, sendError, type AuthenticatedRequest } from '../_lib/auth.js';
 import { db } from '../_lib/db.js';
-import { getWorkflowStatus } from '../_lib/github.js';
+import { getWorkflowStatus, getWorkflowProgress } from '../_lib/github.js';
 import { setCorsHeaders } from '../_lib/cors.js';
 
 async function handler(req: AuthenticatedRequest, res: VercelResponse) {
@@ -11,8 +11,11 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
     return sendError(res, 'Job ID is required');
   }
 
-  // GET - Get single sync job
+  // GET - Get single sync job.
+  // Pass ?progress=1 to also get step-level GitHub Actions progress.
   if (req.method === 'GET') {
+    const wantProgress = req.query.progress === '1' || req.query.progress === 'true';
+
     try {
       // Get job from database
       const job = await db.getSyncJob(id, req.user!.id);
@@ -21,16 +24,27 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         return sendError(res, 'Job not found', 404);
       }
 
-      // If job is running and has a run_id, fetch latest status from GitHub
-      if (job.status === 'running' && job.github_run_id) {
+      let currentJob = job;
+      let progress = null;
+
+      const needsGitHub = Boolean(job.github_run_id) && (job.status === 'running' || wantProgress);
+
+      if (needsGitHub) {
         try {
-          const status = await getWorkflowStatus(job.github_run_id);
+          // getWorkflowProgress already reports run status/conclusion, so when
+          // progress is requested we skip the extra getWorkflowRun call the
+          // CLI would otherwise trigger on every poll.
+          if (wantProgress) {
+            progress = await getWorkflowProgress(job.github_run_id!);
+          }
+
+          const status = progress ?? (await getWorkflowStatus(job.github_run_id!));
 
           // Update job if status changed
-          if (status.status === 'completed') {
+          if (job.status === 'running' && status.status === 'completed') {
             const isSuccess = status.conclusion === 'success';
 
-            const updatedJob = await db.updateSyncJob(job.id, req.user!.id, {
+            currentJob = await db.updateSyncJob(job.id, req.user!.id, {
               status: isSuccess ? 'success' : 'failed',
               conclusion: status.conclusion || undefined,
               completed_at: new Date().toISOString(),
@@ -53,16 +67,16 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
                 // Don't fail the request if cleanup fails
               }
             }
-
-            return sendSuccess(res, { job: updatedJob });
           }
         } catch (error) {
           console.error('Failed to fetch GitHub status:', error);
-          // Continue with database job data
+          // GitHub data is best-effort; fall back to what the database knows
         }
       }
 
-      return sendSuccess(res, { job });
+      return wantProgress
+        ? sendSuccess(res, { job: currentJob, progress })
+        : sendSuccess(res, { job: currentJob });
     } catch (error: any) {
       console.error('Failed to get job:', error);
       return sendError(res, 'Failed to retrieve sync job', 500);

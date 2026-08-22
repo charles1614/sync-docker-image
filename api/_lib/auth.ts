@@ -1,48 +1,90 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createUserClient } from './db.js';
+import { looksLikeApiToken, verifyApiToken } from './apiToken.js';
+
+export type AuthMode = 'session' | 'token';
 
 export interface AuthenticatedRequest extends VercelRequest {
   user?: {
     id: string;
     email?: string;
+    // How the caller authenticated: a browser session (Supabase JWT) or a CLI API token
+    auth_mode: AuthMode;
+    token_id?: string;
   };
 }
 
-// Middleware to verify authentication
+function extractBearer(req: VercelRequest): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  return authHeader.substring(7).trim() || null;
+}
+
+// Resolve the caller from either a Supabase session JWT or an `sdi_` API token
+async function resolveUser(token: string): Promise<AuthenticatedRequest['user'] | null> {
+  if (looksLikeApiToken(token)) {
+    const verified = await verifyApiToken(token);
+    if (!verified) return null;
+
+    return {
+      id: verified.user_id,
+      auth_mode: 'token',
+      token_id: verified.token_id,
+    };
+  }
+
+  const supabase = createUserClient(token);
+  const { data: { user }, error } = await supabase.auth.getUser();
+
+  if (error || !user) return null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    auth_mode: 'session',
+  };
+}
+
+// Middleware to verify authentication.
+// Accepts both browser sessions and CLI API tokens unless `sessionOnly` is set.
 export async function requireAuth(
   req: AuthenticatedRequest,
   res: VercelResponse,
-  handler: (req: AuthenticatedRequest, res: VercelResponse) => Promise<VercelResponse>
+  handler: (req: AuthenticatedRequest, res: VercelResponse) => Promise<VercelResponse>,
+  options: { sessionOnly?: boolean } = {}
 ) {
   try {
-    // Get access token from Authorization header
-    const authHeader = req.headers.authorization;
+    const token = extractBearer(req);
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!token) {
       return res.status(401).json({
         success: false,
         error: 'Missing or invalid authorization header',
       });
     }
 
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+    const user = await resolveUser(token);
 
-    // Verify token with Supabase
-    const supabase = createUserClient(token);
-    const { data: { user }, error } = await supabase.auth.getUser();
-
-    if (error || !user) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         error: 'Invalid or expired token',
       });
     }
 
+    // API tokens must never be able to mint or revoke other API tokens,
+    // otherwise a leaked token could keep re-issuing access to itself.
+    if (options.sessionOnly && user.auth_mode !== 'session') {
+      return res.status(403).json({
+        success: false,
+        error: 'This endpoint requires a browser session. API tokens cannot manage API tokens.',
+      });
+    }
+
     // Attach user to request
-    req.user = {
-      id: user.id,
-      email: user.email,
-    };
+    req.user = user;
 
     // Call the handler
     await handler(req, res);
@@ -53,6 +95,15 @@ export async function requireAuth(
       error: 'Internal server error',
     });
   }
+}
+
+// Same as requireAuth, but rejects API tokens
+export async function requireSessionAuth(
+  req: AuthenticatedRequest,
+  res: VercelResponse,
+  handler: (req: AuthenticatedRequest, res: VercelResponse) => Promise<VercelResponse>
+) {
+  return requireAuth(req, res, handler, { sessionOnly: true });
 }
 
 // Helper to send success response

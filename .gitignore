@@ -1,3 +1,6 @@
 .DS_Store
 *.log
 run_logs/
+node_modules/
+*.tgz
+.vercel

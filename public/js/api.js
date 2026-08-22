@@ -75,3 +75,26 @@ export async function deleteSyncJob(jobId) {
     method: 'DELETE',
   });
 }
+
+// --- API tokens (CLI credentials) ---
+// These endpoints require a browser session: an API token cannot mint another.
+
+export async function listApiTokens() {
+  return request('/tokens');
+}
+
+export async function createApiToken(name, expiresInDays) {
+  return request('/tokens', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      expires_in_days: expiresInDays ?? null,
+    }),
+  });
+}
+
+export async function revokeApiToken(tokenId) {
+  return request(`/tokens/${tokenId}`, {
+    method: 'DELETE',
+  });
+}

@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import type { SyncJob, ImageParts } from './types.js';
+import type { SyncJob, ImageParts, WorkflowStep, WorkflowProgress } from './types.js';
 
 const githubToken = process.env.GITHUB_TOKEN;
 const githubRepository = process.env.GITHUB_REPOSITORY;
@@ -23,11 +23,13 @@ export function parseImageUrl(imageUrl: string): ImageParts {
 
   let remaining = imageUrl;
 
-  // Extract tag if present
-  if (remaining.includes(':')) {
-    const [beforeTag, tag] = remaining.split(':');
-    parts.tag = tag;
-    remaining = beforeTag;
+  // Extract tag if present. Use the last colon so tags containing dots
+  // ("13.1.0-devel-ubuntu24.04") survive, and skip a colon that belongs to a
+  // registry port ("localhost:5000/nginx") rather than to a tag.
+  const lastColon = remaining.lastIndexOf(':');
+  if (lastColon !== -1 && !remaining.slice(lastColon + 1).includes('/')) {
+    parts.tag = remaining.slice(lastColon + 1);
+    remaining = remaining.slice(0, lastColon);
   }
 
   // Extract registry if present (contains dot and slash)
@@ -151,5 +153,42 @@ export async function getWorkflowStatus(runId: number | string) {
     conclusion: run.data.conclusion as string | null,
     html_url: run.data.html_url,
     run_number: run.data.run_number,
+  };
+}
+
+// Get fine-grained progress for a workflow run: which step is executing right
+// now, and how many have finished. Used by the CLI's `--wait` progress line.
+export async function getWorkflowProgress(runId: number | string): Promise<WorkflowProgress> {
+  const runId_ = Number(runId);
+
+  const [run, jobs] = await Promise.all([
+    octokit.actions.getWorkflowRun({ owner, repo, run_id: runId_ }),
+    octokit.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId_, per_page: 20 }),
+  ]);
+
+  const steps: WorkflowStep[] = [];
+
+  for (const job of jobs.data.jobs) {
+    for (const step of job.steps || []) {
+      steps.push({
+        name: step.name,
+        status: step.status as WorkflowStep['status'],
+        conclusion: step.conclusion ?? null,
+        number: step.number,
+      });
+    }
+  }
+
+  const inProgress = steps.find((s) => s.status === 'in_progress');
+  const completedSteps = steps.filter((s) => s.status === 'completed').length;
+
+  return {
+    status: run.data.status as WorkflowProgress['status'],
+    conclusion: run.data.conclusion as string | null,
+    html_url: run.data.html_url,
+    steps,
+    current_step: inProgress?.name ?? null,
+    completed_steps: completedSteps,
+    total_steps: steps.length,
   };
 }
