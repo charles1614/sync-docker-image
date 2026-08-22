@@ -1,12 +1,13 @@
 name: Publish CLI to npm
 
-# Tag the commit to release, e.g. `git tag cli-v1.0.1 && git push --tags`.
-# Plain `v*` tags work too, for consistency with other repos.
+# Tag the commit to release, e.g. `git tag cli-v1.0.2 && git push --tags`.
+# Deliberately NOT matching a bare `v*`: the repo root holds a separate package
+# for the web app, and an unrelated `v2.0.0` tag would otherwise publish the CLI
+# under that version -- which npm will not let you take back.
 on:
   push:
     tags:
       - "cli-v*"
-      - "v*"
 
 permissions:
   contents: read

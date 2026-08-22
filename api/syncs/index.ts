@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { requireAuth, sendSuccess, sendError, type AuthenticatedRequest } from '../_lib/auth.js';
 import { db } from '../_lib/db.js';
-import { parseImageUrl, triggerWorkflow, getWorkflowStatus } from '../_lib/github.js';
+import { parseImageUrl, triggerWorkflow } from '../_lib/github.js';
+import { refreshJob } from '../_lib/jobStatus.js';
 import type { CreateSyncJobRequest } from '../_lib/types.js';
 import { setCorsHeaders } from '../_lib/cors.js';
 import { validateImageUrl, validateWorkflowType } from '../_lib/validation.js';
@@ -21,51 +22,12 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         search: search as string | undefined,
       });
 
-      // Update status for running jobs by checking GitHub
+      // Bring running jobs up to date with GitHub. Independent per job, so
+      // run them concurrently rather than one after another.
       const updatedJobs = await Promise.all(
         result.jobs.map(async (job) => {
-          // Only check GitHub if job is running and has a run_id
-          if (job.status === 'running' && job.github_run_id) {
-            try {
-              const githubStatus = await getWorkflowStatus(job.github_run_id);
-
-              // Update job if GitHub workflow is completed
-              if (githubStatus.status === 'completed') {
-                const isSuccess = githubStatus.conclusion === 'success';
-
-                const updated = await db.updateSyncJob(job.id, req.user!.id, {
-                  status: isSuccess ? 'success' : 'failed',
-                  conclusion: githubStatus.conclusion || undefined,
-                  completed_at: new Date().toISOString(),
-                  logs_url: githubStatus.html_url,
-                });
-
-                // Auto-cleanup old successful jobs
-                if (isSuccess) {
-                  try {
-                    const deletedCount = await db.deleteOlderSuccessfulJobs(
-                      req.user!.id,
-                      job.source_repo,
-                      job.id
-                    );
-                    if (deletedCount > 0) {
-                      console.log(`Cleaned up ${deletedCount} old successful jobs for ${job.source_repo}`);
-                    }
-                  } catch (error) {
-                    console.error('Failed to auto-cleanup old jobs:', error);
-                    // Don't fail the request if cleanup fails
-                  }
-                }
-
-                return updated;
-              }
-            } catch (error) {
-              console.error(`Failed to update status for job ${job.id}:`, error);
-              // Continue with original job data if GitHub check fails
-            }
-          }
-
-          return job;
+          const { job: refreshed } = await refreshJob(job, req.user!.id);
+          return refreshed;
         })
       );
 
@@ -102,11 +64,14 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         return sendError(res, 'source_image is required');
       }
 
-      // Validate source image
+      // Validate source image. Use the normalized value from here on -- the
+      // raw request field may carry whitespace that would otherwise reach the
+      // workflow inputs verbatim.
       const sourceValidation = validateImageUrl(source_image);
       if (!sourceValidation.valid) {
         return sendError(res, `Invalid source image: ${sourceValidation.error}`);
       }
+      const sourceImage = sourceValidation.value!;
 
       // Validate workflow type if provided
       if (workflow_type) {
@@ -116,7 +81,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
         }
       }
 
-      const sourceParts = parseImageUrl(source_image);
+      const sourceParts = parseImageUrl(sourceImage);
 
       // Determine workflow type if not specified
       let finalWorkflowType: 'copy' | 'sync' = workflow_type || 'copy';
@@ -130,7 +95,7 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
       // repo path, or omit the destination entirely. Already-qualified values,
       // such as the ones the web form sends, pass through untouched.
       const resolvedDestination = normalizeDestination(
-        source_image,
+        sourceImage,
         destination_image,
         finalWorkflowType
       );
@@ -140,17 +105,18 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
       if (!destValidation.valid) {
         return sendError(res, `Invalid destination image: ${destValidation.error}`);
       }
+      const destinationImage = destValidation.value!;
 
-      const destParts = parseImageUrl(resolvedDestination);
+      const destParts = parseImageUrl(destinationImage);
 
       // Create sync job in database
       const job = await db.createSyncJob({
         user_id: req.user!.id,
         workflow_type: finalWorkflowType,
         source_registry: sourceParts.registry,
-        source_repo: source_image,
+        source_repo: sourceImage,
         destination_registry: destParts.registry,
-        destination_repo: resolvedDestination,
+        destination_repo: destinationImage,
         status: 'pending',
       });
 

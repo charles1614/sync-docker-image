@@ -318,6 +318,13 @@ sdi login https://your-app.vercel.app
 
 按提示粘贴 token 即可。凭据保存在 `~/.config/sync-docker-image/config.json`（权限 `0600`）。
 
+> 注意是 `sdi login <url>` 然后按提示粘贴，而不是 `--token <值>`：
+> 后者会把明文 token 写进 shell 历史。需要非交互登录时用 `--token-stdin`：
+>
+> ```bash
+> cat token.txt | sdi login https://your-app.vercel.app --token-stdin
+> ```
+
 CI 或容器里可以跳过 `login`，直接用环境变量：
 
 ```bash
@@ -383,6 +390,8 @@ esac
 ```
 
 `--wait` 默认每 5 秒轮询一次、30 分钟超时，可用 `--interval` 和 `--timeout`（单位：秒）调整。
+轮询间隔会随等待时间自动放宽（1 分钟后 10 秒、5 分钟后 30 秒），以免长时间等待耗尽 GitHub API 配额；
+显式传入 `--interval` 则固定为该值。单次轮询失败会自动重试，连续失败 5 次才放弃。
 
 ### Token 的安全边界
 
@@ -396,10 +405,13 @@ esac
 `.github/workflows/publish-cli.yml` 在推送 tag 时自动发布：
 
 ```bash
-# 更新 cli/package.json 里的 version（或者直接靠 tag 决定）
-git tag cli-v1.0.1
+# 先更新 cli/package.json 里的 version 并提交，再打对应的 tag
+git tag cli-v1.0.2
 git push --tags
 ```
+
+> 只匹配 `cli-v*`。仓库根目录另有一个 Web 应用的 package.json，如果也匹配裸的 `v*`，
+> 一个用于 Web 发版的 `v2.0.0` tag 就会把 CLI 以该版本号发到 npm —— 而 npm 的版本号无法回收。
 
 workflow 会用 tag 推导版本号、跑冒烟测试，然后通过 npm
 [trusted publishing](https://docs.npmjs.com/trusted-publishers)（OIDC，无需在仓库里存 npm token）发布。
@@ -427,6 +439,9 @@ workflow 会用 tag 推导版本号、跑冒烟测试，然后通过 npm
 
 ![Run Copy workflow](assets/copy.png)
 
+> `job_id` 是可选输入，Web/CLI 发起时会自动带上，用来把这次 workflow run 关联回发起它的任务
+> （手动运行或用 `exec.sh` 时留空即可）。
+>
 > 填写说明：
 >
 > 如同步 DockerHub 上的 nginx:1.13 到 阿里云容器镜像仓库 registry.cn-beijing.aliyuncs.com/ikrong/nginx:1.13，则填写如下：

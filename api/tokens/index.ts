@@ -3,6 +3,7 @@ import { requireSessionAuth, sendSuccess, sendError, type AuthenticatedRequest }
 import { tokenDb } from '../_lib/apiToken.js';
 import { setCorsHeaders } from '../_lib/cors.js';
 import { sanitizeString } from '../_lib/validation.js';
+import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '../_lib/rateLimit.js';
 import type { CreateApiTokenRequest } from '../_lib/types.js';
 
 const MAX_ACTIVE_TOKENS = 20;
@@ -22,6 +23,19 @@ async function handler(req: AuthenticatedRequest, res: VercelResponse) {
 
   // POST - create a new token. The plaintext value is returned exactly once.
   if (req.method === 'POST') {
+    // Minting credentials is rare and expensive to get wrong, so rate limit it
+    // the same way login and job creation are.
+    const clientId = getClientIdentifier(req);
+    const rateLimit = checkRateLimit(`createToken:${clientId}`, RATE_LIMITS.createToken);
+
+    res.setHeader('X-RateLimit-Limit', RATE_LIMITS.createToken.maxRequests.toString());
+    res.setHeader('X-RateLimit-Remaining', rateLimit.remaining.toString());
+    res.setHeader('X-RateLimit-Reset', new Date(rateLimit.resetTime).toISOString());
+
+    if (!rateLimit.allowed) {
+      return sendError(res, 'Too many tokens created. Please try again later.', 429);
+    }
+
     try {
       const { name, expires_in_days }: CreateApiTokenRequest = req.body || {};
 

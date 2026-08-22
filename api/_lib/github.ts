@@ -77,9 +77,49 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Marker embedded in the dispatch inputs and echoed back by the workflow's
+// run-name, so a run can be matched to the job that dispatched it. Without it
+// the only handle is "newest run", which mis-attributes whenever two syncs are
+// dispatched close together -- routine now that the CLI can batch them.
+export function runMarker(jobId: string): string {
+  return `[sdi:${jobId}]`;
+}
+
+function workflowFileFor(job: Pick<SyncJob, 'workflow_type'>): string {
+  return job.workflow_type === 'copy' ? 'copy.yml' : 'sync.yml';
+}
+
+/**
+ * Find the run this job dispatched, by matching the marker in its run-name.
+ * Returns null when the run has not been created yet (GitHub takes a moment)
+ * or when the workflow predates the marker.
+ */
+export async function findRunForJob(
+  job: Pick<SyncJob, 'id' | 'workflow_type' | 'created_at'>
+): Promise<{ run_id: number; run_number: number } | null> {
+  const marker = runMarker(job.id);
+
+  // Only consider runs that could plausibly belong to this job. The window
+  // starts slightly before the row was created to absorb clock skew.
+  const createdFrom = new Date(new Date(job.created_at).getTime() - 60_000).toISOString();
+
+  const runs = await octokit.actions.listWorkflowRuns({
+    owner,
+    repo,
+    workflow_id: workflowFileFor(job),
+    event: 'workflow_dispatch',
+    created: `>=${createdFrom}`,
+    per_page: 50,
+  });
+
+  const match = runs.data.workflow_runs.find((run) => run.name?.includes(marker));
+
+  return match ? { run_id: match.id, run_number: match.run_number } : null;
+}
+
 // Trigger GitHub Actions workflow
 export async function triggerWorkflow(job: SyncJob): Promise<{ run_id?: number; run_number?: number }> {
-  const workflowFile = job.workflow_type === 'copy' ? 'copy.yml' : 'sync.yml';
+  const workflowFile = workflowFileFor(job);
 
   const sourceParts = parseImageUrl(job.source_repo);
   const destParts = parseImageUrl(job.destination_repo);
@@ -92,6 +132,7 @@ export async function triggerWorkflow(job: SyncJob): Promise<{ run_id?: number; 
       destination: job.destination_registry,
       source_repo: buildRepoString(sourceParts, true),
       destination_repo: buildRepoString(destParts, true),
+      job_id: runMarker(job.id),
     };
   } else {
     // sync workflow
@@ -100,6 +141,7 @@ export async function triggerWorkflow(job: SyncJob): Promise<{ run_id?: number; 
       destination: job.destination_registry,
       source_repo: buildRepoString(sourceParts, false), // no tag for sync
       destination_scope: destParts.scope || destParts.repo,
+      job_id: runMarker(job.id),
     };
   }
 
@@ -112,31 +154,24 @@ export async function triggerWorkflow(job: SyncJob): Promise<{ run_id?: number; 
     inputs,
   });
 
-  // Wait for workflow to appear in the list
-  await sleep(10000);
+  // Poll briefly for the run to appear. Kept short so the whole request stays
+  // inside the serverless duration limit; if the run is not visible yet the
+  // job is simply attributed later, on the first status read.
+  const deadline = Date.now() + 8000;
 
-  // Try to get the run ID
-  try {
-    const runs = await octokit.actions.listWorkflowRuns({
-      owner,
-      repo,
-      workflow_id: workflowFile,
-      per_page: 5,
-    });
+  while (Date.now() < deadline) {
+    await sleep(2000);
 
-    // Find the most recent run that matches our workflow
-    const recentRun = runs.data.workflow_runs[0];
-
-    if (recentRun) {
-      return {
-        run_id: recentRun.id,
-        run_number: recentRun.run_number,
-      };
+    try {
+      const found = await findRunForJob(job);
+      if (found) return found;
+    } catch (error) {
+      console.error('Failed to look up dispatched run:', error);
+      break;
     }
-  } catch (error) {
-    console.error('Failed to get run ID:', error);
   }
 
+  // Not found yet -- not an error. attachRunId() picks it up on the next poll.
   return {};
 }
 

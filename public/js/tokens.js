@@ -60,8 +60,9 @@ document.getElementById('tokenForm').addEventListener('submit', async (e) => {
     const { token } = await createApiToken(name, expiresInDays);
 
     newTokenValue.textContent = token;
-    loginSnippet.textContent =
-      `sdi login ${window.location.origin} --token ${token}`;
+    // Deliberately NOT `--token <value>`: that would persist the secret in the
+    // user's shell history. `sdi login <url>` prompts for it without echoing.
+    loginSnippet.textContent = `sdi login ${window.location.origin}`;
     newTokenPanel.classList.remove('hidden');
     newTokenPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 

@@ -1,5 +1,5 @@
 name: Copy Docker Image
-run-name: Copy ${{ inputs.source_repo }} to ${{ inputs.destination_repo }}
+run-name: Copy ${{ inputs.source_repo }} to ${{ inputs.destination_repo }} ${{ inputs.job_id }}
 on: 
   workflow_dispatch:
     inputs:
@@ -18,6 +18,10 @@ on:
       destination_repo:
         description: '目标仓库及标签 (格式 repo:tag)'
         required: true
+        default: ''
+      job_id:
+        description: '调用方标记 (可选，用于把本次运行关联回发起它的任务)'
+        required: false
         default: ''
 
 jobs:

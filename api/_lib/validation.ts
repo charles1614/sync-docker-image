@@ -20,6 +20,10 @@ const DOCKER_IMAGE_PATTERN = /^([a-z0-9](?:[a-z0-9-_.]*[a-z0-9])?(?:\.[a-z0-9](?
 
 export interface ValidationResult {
   valid: boolean;
+  // The normalized (trimmed) value. Callers MUST use this rather than the
+  // string they passed in: validating one string and then acting on another
+  // is how leading/trailing whitespace slips through into workflow inputs.
+  value?: string;
   error?: string;
 }
 
@@ -35,22 +39,33 @@ export function validateImageUrl(imageUrl: string): ValidationResult {
   }
 
   // Trim whitespace
-  imageUrl = imageUrl.trim();
+  const value = imageUrl.trim();
+
+  if (!value) {
+    return { valid: false, error: 'Image URL is required' };
+  }
+
+  // Reject any remaining whitespace or control character outright. The regex
+  // below anchors with ^...$, and in JS `$` also matches just before a
+  // trailing newline, so "nginx:1.27\n" would otherwise pass.
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) {
+    return { valid: false, error: 'Image URL must not contain whitespace or control characters' };
+  }
 
   // Check for dangerous characters
-  if (/[<>;"'`$(){}[\]\\|&]/.test(imageUrl)) {
+  if (/[<>;"'`$(){}[\]\\|&]/.test(value)) {
     return { valid: false, error: 'Image URL contains invalid characters' };
   }
 
   // Validate format with regex
-  if (!DOCKER_IMAGE_PATTERN.test(imageUrl)) {
+  if (!DOCKER_IMAGE_PATTERN.test(value)) {
     return { valid: false, error: 'Invalid Docker image URL format' };
   }
 
   // Extract registry if present
   let registry = 'docker.io';
-  if (imageUrl.includes('/')) {
-    const firstPart = imageUrl.split('/')[0];
+  if (value.includes('/')) {
+    const firstPart = value.split('/')[0];
     // Check if first part looks like a registry (contains dot or port)
     if (firstPart.includes('.') || firstPart.includes(':')) {
       registry = firstPart.split(':')[0]; // Remove port if present
@@ -65,7 +80,7 @@ export function validateImageUrl(imageUrl: string): ValidationResult {
     };
   }
 
-  return { valid: true };
+  return { valid: true, value };
 }
 
 export function validateWorkflowType(workflowType: string): ValidationResult {

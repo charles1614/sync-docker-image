@@ -20,6 +20,13 @@ Generate a token in the web UI at `https://<your-app>/tokens`, then:
 sdi login https://your-app.vercel.app
 ```
 
+Paste the token at the prompt — it is not echoed, so it stays out of your shell
+history. For non-interactive logins, pipe it instead of passing `--token`:
+
+```bash
+cat token.txt | sdi login https://your-app.vercel.app --token-stdin
+```
+
 The token is stored in `~/.config/sync-docker-image/config.json` (mode `0600`).
 For CI, skip `login` and export environment variables instead:
 
@@ -85,7 +92,10 @@ esac
 ```
 
 `--wait` polls every 5s and gives up after 30 minutes; tune with `--interval`
-and `--timeout` (both in seconds).
+and `--timeout` (both in seconds). The interval widens automatically as the wait
+goes on (10s after a minute, 30s after five) so long waits do not exhaust the
+server's GitHub API quota; passing `--interval` pins it. A failed poll is
+retried — only five consecutive failures abort the wait.
 
 ## Commands
 

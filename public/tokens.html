@@ -52,6 +52,10 @@
 
                 <p class="mt-4 text-sm font-medium text-green-900">Log the CLI in with:</p>
                 <pre id="loginSnippet" class="mt-1 px-3 py-2 bg-green-900 text-green-50 rounded text-xs overflow-x-auto"></pre>
+                <p class="mt-2 text-xs text-green-800">
+                    Paste the token when prompted — it is not echoed, and stays out of your shell history.
+                    For CI, pipe it instead: <code class="px-1 py-0.5 bg-green-100 rounded">… | sdi login &lt;url&gt; --token-stdin</code>
+                </p>
 
                 <button id="dismissTokenBtn" class="mt-4 text-sm text-green-800 hover:text-green-900 underline">
                     Done, hide this

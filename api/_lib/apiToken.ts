@@ -1,4 +1,4 @@
-import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { supabase } from './db.js';
 import type { ApiToken, ApiTokenPublic } from './types.js';
 
@@ -65,15 +65,11 @@ export async function verifyApiToken(token: string): Promise<VerifiedToken | nul
 
   if (!data) return null;
 
+  // The query filters on token_hash equality, so a returned row is already an
+  // exact match. (No constant-time compare here: it would be comparing the
+  // hash with itself. The lookup is safe because the token carries 256 bits of
+  // CSPRNG entropy, not because of how the bytes are compared.)
   const row = data as ApiToken;
-
-  // Constant-time compare as a belt-and-braces check against any future
-  // change that might make the lookup non-exact.
-  const expected = Buffer.from(row.token_hash, 'utf8');
-  const actual = Buffer.from(hash, 'utf8');
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    return null;
-  }
 
   if (row.revoked_at) return null;
   if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) return null;
@@ -108,12 +104,15 @@ export const tokenDb = {
     return (data || []).map(toPublicToken);
   },
 
+  // Counts only tokens that verifyApiToken would actually accept, so expired
+  // ones do not silently consume the cap.
   async countActive(userId: string): Promise<number> {
     const { count, error } = await supabase
       .from('api_tokens')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
-      .is('revoked_at', null);
+      .is('revoked_at', null)
+      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
 
     if (error) throw error;
     return count || 0;

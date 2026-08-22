@@ -102,4 +102,8 @@ export const RATE_LIMITS = {
     windowMs: 60 * 1000, // 1 minute
     maxRequests: 10, // 10 job creations per minute
   },
+  createToken: {
+    windowMs: 60 * 60 * 1000, // 1 hour
+    maxRequests: 10, // minting credentials should be rare
+  },
 };

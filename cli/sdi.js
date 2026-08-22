@@ -253,8 +253,19 @@ async function api(baseUrl, token, path, { method = 'GET', body, timeoutMs = 300
   try {
     payload = text ? JSON.parse(text) : {};
   } catch {
-    // A non-JSON body means we hit something other than the API (a login page,
-    // a proxy error). Say so rather than dumping HTML at the user.
+    // A 5xx with a non-JSON body is the platform talking, not us -- typically a
+    // gateway timeout, since creating a job waits on GitHub server-side. Saying
+    // "check your URL" there sends the user after the wrong problem.
+    if (response.status >= 500) {
+      throw new CliError(
+        `${baseUrl} returned HTTP ${response.status} (server error). ` +
+          'The request may have timed out server-side; the sync may still have started. ' +
+          'Check with: sdi list'
+      );
+    }
+
+    // Otherwise we reached something that is not the API at all (a login page,
+    // a proxy). Say so rather than dumping HTML at the user.
     throw new CliError(
       `Unexpected non-JSON response (HTTP ${response.status}) from ${baseUrl}${path}. ` +
         'Check that the URL points at the sync web app.'
@@ -275,6 +286,13 @@ async function api(baseUrl, token, path, { method = 'GET', body, timeoutMs = 300
     }
 
     throw new CliError(message);
+  }
+
+  if (payload.data === undefined) {
+    throw new CliError(
+      `Malformed response from ${baseUrl}${path}: no \`data\` field. ` +
+        'Check that the URL points at the sync web app.'
+    );
   }
 
   return payload.data;
@@ -430,38 +448,92 @@ class ProgressLine {
  * Poll a job until it reaches a terminal state.
  * Returns { job, progress, timedOut }.
  */
-async function waitForJob(url, token, jobId, { intervalMs, timeoutMs }) {
+// Give up only after this many polls fail back to back. A single blip during a
+// half-hour wait must not abort a sync that is running perfectly well.
+const MAX_CONSECUTIVE_POLL_ERRORS = 5;
+
+/**
+ * Each ?progress=1 poll costs the server two GitHub API calls, so a fixed 5s
+ * interval burns ~720 calls over a 30-minute wait against a 5000/hour budget.
+ * Stay responsive early, then ease off. An explicit --interval is honoured
+ * exactly as given.
+ */
+function pollInterval(baseMs, elapsedMs, explicit) {
+  if (explicit) return baseMs;
+  if (elapsedMs < 60_000) return baseMs;
+  if (elapsedMs < 300_000) return Math.max(baseMs, 10_000);
+  return Math.max(baseMs, 30_000);
+}
+
+async function waitForJob(url, token, jobId, { intervalMs, timeoutMs, explicitInterval }) {
   const started = Date.now();
   const line = new ProgressLine();
+  const path = `/syncs/${encodeURIComponent(jobId)}?progress=1`;
+
   let last = null;
+  let consecutiveErrors = 0;
 
   while (true) {
-    const data = await api(url, token, `/syncs/${jobId}?progress=1`);
-    last = data;
+    try {
+      last = await api(url, token, path);
+      consecutiveErrors = 0;
+    } catch (error) {
+      consecutiveErrors++;
 
-    const { job, progress } = data;
+      // Bad credentials or a missing job will never recover -- fail fast.
+      if (error instanceof CliError && error.code === EXIT.USAGE) {
+        line.clear();
+        throw error;
+      }
 
-    if (job.status === 'success' || job.status === 'failed') {
-      line.clear();
-      return { job, progress, timedOut: false };
+      if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+        line.clear();
+        throw new CliError(
+          `Lost contact with ${url} after ${consecutiveErrors} consecutive attempts: ${error.message}. ` +
+            `The sync may still be running -- check with: sdi status ${jobId}`
+        );
+      }
+
+      line.update(
+        `${color.yellow('retrying')} ${error.message}`,
+        ` ${color.dim(`· attempt ${consecutiveErrors}/${MAX_CONSECUTIVE_POLL_ERRORS}`)}`
+      );
     }
 
-    const elapsed = formatDuration(Date.now() - started);
-    const step = progress?.current_step;
-    const counter =
-      progress && progress.total_steps > 0
-        ? ` (${progress.completed_steps}/${progress.total_steps})`
-        : '';
-    const detail = step ? `${step}${counter}` : job.status;
+    if (last) {
+      const { job, progress } = last;
 
-    line.update(detail, ` ${color.dim(`· ${elapsed}`)}`);
+      if (job.status === 'success' || job.status === 'failed') {
+        line.clear();
+        return { job, progress, timedOut: false };
+      }
 
-    if (Date.now() - started >= timeoutMs) {
+      if (consecutiveErrors === 0) {
+        const elapsed = formatDuration(Date.now() - started);
+        const step = progress?.current_step;
+        const counter =
+          progress && progress.total_steps > 0
+            ? ` (${progress.completed_steps}/${progress.total_steps})`
+            : '';
+        const detail = step ? `${step}${counter}` : job.status;
+
+        line.update(detail, ` ${color.dim(`· ${elapsed}`)}`);
+      }
+    }
+
+    const elapsedMs = Date.now() - started;
+
+    if (elapsedMs >= timeoutMs) {
       line.clear();
+
+      if (!last) {
+        throw new CliError(`Timed out before reading any status for job ${jobId}`, EXIT.TIMEOUT);
+      }
+
       return { job: last.job, progress: last.progress, timedOut: true };
     }
 
-    await sleep(intervalMs);
+    await sleep(pollInterval(intervalMs, elapsedMs, explicitInterval));
   }
 }
 
@@ -551,10 +623,8 @@ async function cmdConfig(positional, flags) {
 }
 
 async function cmdCreate(workflowType, positional, flags) {
-  const { url, token } = requireAuth(flags);
-
   const source = positional[0];
-  const destination = positional[1] || flags.dest || flags.destination;
+  const destination = positional[1];
 
   if (!source) {
     throw new CliError(`Usage: sdi ${workflowType} <source-image> [destination]`, EXIT.USAGE);
@@ -562,6 +632,9 @@ async function cmdCreate(workflowType, positional, flags) {
 
   const intervalMs = intFlag(flags, 'interval', 5, { min: 1, max: 300 }) * 1000;
   const timeoutMs = intFlag(flags, 'timeout', 1800, { min: 10, max: 21600 }) * 1000;
+  const explicitInterval = flags.interval !== undefined;
+
+  const { url, token } = requireAuth(flags);
 
   info(color.dim(`Triggering ${workflowType} for ${source}…`));
 
@@ -589,13 +662,12 @@ async function cmdCreate(workflowType, positional, flags) {
     return EXIT.OK;
   }
 
-  const result = await waitForJob(url, token, job.id, { intervalMs, timeoutMs });
+  const result = await waitForJob(url, token, job.id, { intervalMs, timeoutMs, explicitInterval });
 
   return finishJob(result, { destination: target, pull: flags.pull });
 }
 
 async function cmdStatus(positional, flags) {
-  const { url, token } = requireAuth(flags);
   const jobId = positional[0];
 
   if (!jobId) {
@@ -604,13 +676,16 @@ async function cmdStatus(positional, flags) {
 
   const intervalMs = intFlag(flags, 'interval', 5, { min: 1, max: 300 }) * 1000;
   const timeoutMs = intFlag(flags, 'timeout', 1800, { min: 10, max: 21600 }) * 1000;
+  const explicitInterval = flags.interval !== undefined;
+
+  const { url, token } = requireAuth(flags);
 
   if (flags.wait) {
-    const result = await waitForJob(url, token, jobId, { intervalMs, timeoutMs });
+    const result = await waitForJob(url, token, jobId, { intervalMs, timeoutMs, explicitInterval });
     return finishJob(result, { destination: fullDestination(result.job), pull: flags.pull });
   }
 
-  const { job, progress } = await api(url, token, `/syncs/${jobId}?progress=1`);
+  const { job, progress } = await api(url, token, `/syncs/${encodeURIComponent(jobId)}?progress=1`);
 
   if (jsonMode) return emitJson({ job, progress, destination: fullDestination(job) });
 
@@ -697,10 +772,10 @@ function dockerPull(image) {
 }
 
 async function cmdList(positional, flags) {
-  const { url, token } = requireAuth(flags);
-
   const limit = intFlag(flags, 'limit', 10, { min: 1, max: 100 });
   const page = intFlag(flags, 'page', 1, { min: 1, max: 10000 });
+
+  const { url, token } = requireAuth(flags);
 
   const params = new URLSearchParams({
     limit: String(limit),
@@ -741,11 +816,11 @@ async function cmdList(positional, flags) {
 }
 
 async function cmdRemove(positional, flags) {
-  const { url, token } = requireAuth(flags);
-
   if (positional.length === 0) {
     throw new CliError('Usage: sdi rm <job-id> [job-id...]', EXIT.USAGE);
   }
+
+  const { url, token } = requireAuth(flags);
 
   const noun = positional.length === 1 ? 'job' : `${positional.length} jobs`;
   if (!(await confirm(`Delete ${noun}?`, { yes: flags.yes }))) {
@@ -758,7 +833,7 @@ async function cmdRemove(positional, flags) {
 
   for (const id of positional) {
     try {
-      await api(url, token, `/syncs/${id}`, { method: 'DELETE' });
+      await api(url, token, `/syncs/${encodeURIComponent(id)}`, { method: 'DELETE' });
       deleted.push(id);
       if (!jsonMode) info(color.green('✓'), `Deleted ${id}`);
     } catch (error) {
@@ -794,7 +869,8 @@ ${color.bold('COMMANDS')}
 ${color.bold('FLAGS')}
   -w, --wait               Block until the job finishes
       --timeout <seconds>  Give up waiting after this long (default 1800)
-      --interval <seconds> Poll interval while waiting (default 5)
+      --interval <seconds> Poll interval while waiting (default 5, then eases
+                           off automatically; setting this pins it)
       --pull               Run \`docker pull\` on the result after a successful sync
       --json               Emit JSON on stdout; human output goes to stderr
   -s, --status <status>    list: filter by pending|running|success|failed
@@ -805,6 +881,8 @@ ${color.bold('FLAGS')}
   -q, --quiet              Suppress non-essential output
       --url <url>          Override the configured web app URL
       --token <token>      Override the configured API token
+      --token-stdin        login: read the token from stdin instead of argv,
+                           so it never appears in ps output or shell history
       --no-color           Disable coloured output
   -h, --help               Show this help
   -v, --version            Show the version
@@ -820,6 +898,9 @@ ${color.bold('EXIT CODES')}
 ${color.bold('EXAMPLES')}
   ${color.dim('# Log in once; the token comes from the web UI at <url>/tokens')}
   sdi login https://your-app.vercel.app
+
+  ${color.dim('# Non-interactive login, without putting the token in argv')}
+  cat token.txt | sdi login https://your-app.vercel.app --token-stdin
 
   ${color.dim('# Destination defaults to the registry/namespace configured server-side')}
   sdi copy nginx:1.27

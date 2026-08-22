@@ -21,7 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --check sdi.js && node sdi.js --version"
+    "test": "node --check sdi.js && node --test test/*.test.mjs"
   },
   "keywords": [
     "docker",

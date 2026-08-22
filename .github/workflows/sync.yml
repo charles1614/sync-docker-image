@@ -1,5 +1,5 @@
 name: Sync Docker Images
-run-name: Sync ${{ inputs.source_repo }} to ${{ inputs.destination_scope }}
+run-name: Sync ${{ inputs.source_repo }} to ${{ inputs.destination_scope }} ${{ inputs.job_id }}
 on: 
   workflow_dispatch:
     inputs:
@@ -18,6 +18,10 @@ on:
       destination_scope:
         description: '目标Scope (格式 scope)'
         required: true
+        default: ''
+      job_id:
+        description: '调用方标记 (可选，用于把本次运行关联回发起它的任务)'
+        required: false
         default: ''
 
 jobs:
