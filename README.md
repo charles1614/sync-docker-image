@@ -129,12 +129,18 @@ CREATE TABLE api_tokens (
   revoked_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_api_tokens_token_hash ON api_tokens(token_hash);
+-- 按 token_hash 查找由 UNIQUE 约束自带的索引负责，这里只需要列出某用户的 token
 CREATE INDEX idx_api_tokens_user_id ON api_tokens(user_id);
 
 -- 启用行级安全。这里不创建任何策略：该表只允许后端用 service_role 访问，
 -- 前端拿不到任何 token 记录。
 ALTER TABLE api_tokens ENABLE ROW LEVEL SECURITY;
+
+-- 后端一律使用 service key 读写该表，因此面向客户端的角色不需要任何权限。
+-- 收回权限后，该表也不会再出现在自动生成的 GraphQL schema 里，
+-- 拿着公开的 anon key 无法探测到它的存在和字段名。
+REVOKE ALL ON api_tokens FROM anon;
+REVOKE ALL ON api_tokens FROM authenticated;
 ```
 
 4. 点击 "Run" 执行 SQL
