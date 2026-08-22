@@ -1,6 +1,6 @@
 {
   "name": "sync-docker-image-cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "CLI for the Docker image sync web service — trigger syncs to your registry and follow their progress from the terminal",
   "repository": {
     "type": "git",
