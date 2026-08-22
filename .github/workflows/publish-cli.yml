@@ -47,12 +47,26 @@ jobs:
 
       - run: npm test --if-present
 
+      # npm silently rewrites parts of package.json at publish time. A bin path
+      # written as "./sdi.js" gets dropped entirely, which `npm pack` does not
+      # reproduce -- the tarball installs fine locally while the published
+      # package ships with no executable. Fail loudly instead.
+      - name: Check package.json needs no publish-time correction
+        run: |
+          cp package.json /tmp/pkg.before.json
+          npm pkg fix
+          if ! diff -u /tmp/pkg.before.json package.json; then
+            echo "::error::package.json is not in its normalized form. Run 'npm pkg fix' in cli/ and commit the result."
+            exit 1
+          fi
+
       - name: Smoke test the published entry point
         run: |
           npm pack
           npm install -g ./sync-docker-image-cli-*.tgz
           sdi --version
           sdi help > /dev/null
+          test -n "$(command -v sdi)" || { echo "::error::sdi was not linked onto PATH"; exit 1; }
           rm -f ./*.tgz
 
       - run: npm publish --access public

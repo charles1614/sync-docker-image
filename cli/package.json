@@ -1,7 +1,7 @@
 {
   "name": "sync-docker-image-cli",
   "version": "1.0.0",
-  "description": "CLI for the Docker image sync web service \u2014 trigger syncs to your registry and follow their progress from the terminal",
+  "description": "CLI for the Docker image sync web service — trigger syncs to your registry and follow their progress from the terminal",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/charles1614/sync-docker-image.git",
@@ -13,7 +13,7 @@
   },
   "type": "module",
   "bin": {
-    "sdi": "./sdi.js"
+    "sdi": "sdi.js"
   },
   "files": [
     "sdi.js",
